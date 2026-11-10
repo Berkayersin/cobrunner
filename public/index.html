@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cobrunner</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Bağlantı / yükleniyor -->
+  <div id="loading" class="panel center"><h1><img src="logo.svg" alt="Cobrunner" class="logo"></h1><p>Sunucuya bağlanılıyor... (ilk açılışta 1 dakika sürebilir)</p></div>
+
+  <!-- Giriş / kayıt -->
+  <div id="auth" class="panel hidden">
+    <h1><img src="logo.svg" alt="Cobrunner" class="logo"></h1>
+    <div class="tabs" role="tablist">
+      <button type="button" id="tabLogin" class="tab active" role="tab">Giriş Yap</button>
+      <button type="button" id="tabRegister" class="tab" role="tab">Kayıt Ol</button>
+    </div>
+    <form id="authForm" autocomplete="on">
+      <label class="field">Kullanıcı adı <input id="authName" maxlength="16" autocomplete="username" required></label>
+      <label class="field">Şifre <input id="authPass" type="password" maxlength="64" autocomplete="current-password" required></label>
+      <button id="authSubmit" type="submit">Giriş Yap</button>
+    </form>
+    <p id="authMsg" class="msg" aria-live="polite"></p>
+  </div>
+
+  <!-- Lobi -->
+  <div id="lobby" class="hidden">
+    <header class="topbar">
+      <img src="logo.svg" alt="Cobrunner" class="logo-small">
+      <div>👤 <b id="meName"></b> <button id="logoutBtn" type="button" class="mini">Çıkış</button></div>
+    </header>
+    <div class="grid">
+      <section class="panel">
+        <h2>Maç</h2>
+        <div id="wxCard" class="wxcard" aria-live="polite">
+          <div id="wxMain">📍 Konum alınıyor...</div>
+          <div id="wxSub" class="muted"></div>
+          <div class="row wxrow">
+            <button id="wxRefresh" type="button" class="mini">Konumu yenile</button>
+            <label class="muted demo">Sunum modu
+              <select id="wxDemo" aria-label="Sunum modu hava teması">
+                <option value="">Gerçek hava</option>
+                <option value="sunny">☀️ Güneşli</option>
+                <option value="night">🌙 Gece</option>
+                <option value="cloudy">☁️ Bulutlu</option>
+                <option value="fog">🌫️ Sisli</option>
+                <option value="rain">🌧️ Yağmurlu</option>
+                <option value="snow">❄️ Karlı</option>
+                <option value="storm">⛈️ Fırtına</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div class="field">Yılan rengi
+          <div id="colors" class="colors" role="radiogroup" aria-label="Yılan rengi"></div>
+        </div>
+        <div class="field">Süre
+          <div class="durations">
+            <label><input type="radio" name="dur" value="60" checked> 1 dk</label>
+            <label><input type="radio" name="dur" value="180"> 3 dk</label>
+            <label><input type="radio" name="dur" value="300"> 5 dk</label>
+          </div>
+        </div>
+        <button id="findBtn" type="button">Oyuncu Bul</button>
+        <button id="cancelBtn" type="button" class="secondary hidden">Aramayı İptal Et</button>
+        <p id="status" class="msg" aria-live="polite"></p>
+        <details class="rules">
+          <summary>Nasıl oynanır?</summary>
+          <ul>
+            <li>Yön tuşları / WASD ile yönet; mobilde ekranı kaydır.</li>
+            <li>Sayı yiyince bekleyen işlem değerine uygulanır (varsayılan +).</li>
+            <li>+ − × ÷ yemleri sıradaki sayının işlemini belirler. Bölmede sonuç aşağı yuvarlanır.</li>
+            <li>Değerin hedefe eşit olunca 1 puan alırsın.</li>
+            <li>⟲ hedefi yeniler, değerler korunur. Rakibin hedefe yaklaştıysa boz! Sırayla kullanılır: son kullanan sıradakini yiyemez.</li>
+            <li>Harita, bulunduğun yerin anlık hava durumuna göre değişir (güneş, yağmur, kar, sis, fırtına, gece).</li>
+            <li>Duvarlardan karşıya geçebilir, rakibin içinden geçebilirsin.</li>
+            <li>Berabere biterse son sayıyı yapan kazanır; 0-0 ise altın gol.</li>
+          </ul>
+        </details>
+      </section>
+
+      <section class="panel">
+        <h2>Arkadaşlar</h2>
+        <form id="addFriendForm" class="row">
+          <input id="friendName" maxlength="16" placeholder="Kullanıcı adı" aria-label="Eklenecek kullanıcı adı">
+          <button type="submit" class="small">Ekle</button>
+        </form>
+        <p id="friendMsg" class="msg" aria-live="polite"></p>
+        <div id="incomingWrap" class="hidden">
+          <h3>Gelen istekler</h3>
+          <ul id="incoming" class="list"></ul>
+        </div>
+        <h3>Arkadaş listesi</h3>
+        <ul id="friends" class="list"><li class="muted">Henüz arkadaşın yok.</li></ul>
+        <div id="outgoingWrap" class="hidden">
+          <h3>Bekleyen istekler</h3>
+          <ul id="outgoing" class="list"></ul>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Skorlar</h2>
+        <div id="myStats" class="stats"></div>
+        <h3>Son maçlar</h3>
+        <ul id="recent" class="list"></ul>
+        <h3>En çok kazananlar</h3>
+        <ol id="leaderboard" class="list"></ol>
+      </section>
+    </div>
+    <p class="credit muted">Hava verisi: <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> · Konum: BigDataCloud</p>
+  </div>
+
+  <!-- Davet penceresi -->
+  <div id="inviteModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="inviteText">
+    <div class="panel center">
+      <p id="inviteText"></p>
+      <div class="row">
+        <button id="inviteAccept" type="button">Kabul Et</button>
+        <button id="inviteDecline" type="button" class="secondary">Reddet</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Oyun -->
+  <div id="game" class="hidden">
+    <div id="hud">
+      <div id="p0" class="pinfo"></div>
+      <div id="center">
+        <div class="label">HEDEF</div>
+        <div id="target">-</div>
+        <div id="timer"></div>
+        <div id="resetInfo"></div>
+        <button id="muteBtn" type="button" class="mini" aria-label="Sesi aç/kapat">🔊</button>
+      </div>
+      <div id="p1" class="pinfo"></div>
+    </div>
+    <div id="wxBadge" class="wxbadge"></div>
+    <canvas id="board"></canvas>
+    <div id="overlay" class="modal hidden">
+      <div class="panel center">
+        <h2 id="resultTitle"></h2>
+        <p id="resultReason"></p>
+        <p id="resultScores"></p>
+        <button id="backBtn" type="button">Lobiye Dön</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden" aria-live="polite"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="client.js"></script>
+</body>
+</html>
