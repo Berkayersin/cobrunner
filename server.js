@@ -10,7 +10,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { perMessageDeflate: false });
 const db = createStore();
-app.use(express.static('public', { maxAge: '1h' }));
+app.use(express.static('public', { maxAge: 0 }));
 app.get('/health', (req, res) => res.send('ok'));
 const PORT = process.env.PORT || 3000;
 
