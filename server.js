@@ -10,23 +10,24 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { perMessageDeflate: false });
 const db = createStore();
-app.use(express.static('public', { maxAge: 0 }));
+app.use(express.static('public', { maxAge: 0 }));  // güncellemeler hemen görünsün
 app.get('/health', (req, res) => res.send('ok'));
 const PORT = process.env.PORT || 3000;
 
 // ---- Ayarlar ----
-const TICK_MS = 130;               // yılan hızı (ms / adım)
+const TICK_MS = 130;                 // kobra hızı (ms / adım)
 const COUNTDOWN_MS = 3000;
+const OVERTIME_MAX_MS = 90000;       // altın gol uzatması en fazla 90 sn
 const DURATIONS = [60, 180, 300];
 const INVITE_TTL_MS = 30000;
 const PALETTE = ['#22c55e', '#3b82f6', '#ef4444', '#eab308', '#a855f7', '#ec4899', '#f97316', '#06b6d4'];
 const NAME_RE = /^[A-Za-z0-9_çğıöşüÇĞİÖŞÜ]{3,16}$/;
 
 const queues = { 60: [], 180: [], 300: [] };
-const rooms = new Map();           // roomId -> oda
-const socketRoom = new Map();      // socketId -> roomId
-const online = new Map();          // userId -> socket
-const invites = new Map();         // inviteId -> { fromId, toId, duration, timer }
+const rooms = new Map();
+const socketRoom = new Map();
+const online = new Map();
+const invites = new Map();
 const rnd = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
 
 // ---------- Yardımcılar ----------
@@ -63,13 +64,17 @@ function createRoom(p1, p2, duration) {
   const id = 'room-' + Date.now() + '-' + rnd(1000, 9999);
   const now = Date.now();
   const room = Object.assign(g, { id, duration, startsAt: now + COUNTDOWN_MS, endsAt: now + COUNTDOWN_MS + duration * 1000,
-    overtime: false, finished: false, foodsVer: 0, timer: null });
+    overtime: false, overtimeStart: 0, finished: false, foodsVer: 0, timer: null });
   rooms.set(id, room);
   for (const p of [p1, p2]) { p.socket.join(id); socketRoom.set(p.socket.id, id); }
-  const weather = { [p1.socket.id]: weatherOf(p1.socket), [p2.socket.id]: weatherOf(p2.socket) };
-  const info = { duration, cols: game.COLS, rows: game.ROWS, weather };
-  p1.socket.emit('matchFound', { ...info, opponent: p2.user.username });
-  p2.socket.emit('matchFound', { ...info, opponent: p1.user.username });
+  // Sabit bilgiler (isim, renk, hava) bir kez gönderilir; her adımda sadece değişenler gider
+  const info = {
+    duration, cols: game.COLS, rows: game.ROWS, freezeMs: game.FREEZE_MS,
+    players: room.snakes.map(s => ({ id: s.id, name: s.name, color: s.color })),
+    weather: { [p1.socket.id]: weatherOf(p1.socket), [p2.socket.id]: weatherOf(p2.socket) }
+  };
+  p1.socket.emit('matchFound', info);
+  p2.socket.emit('matchFound', info);
   room.timer = setInterval(() => tick(room), TICK_MS);
   broadcast(room, now);
   notifyFriendsOf(p1.user.id); notifyFriendsOf(p2.user.id);
@@ -79,33 +84,51 @@ function tick(room) {
   if (room.finished) return;
   const now = Date.now();
   if (now >= room.startsAt) {
-    const scorers = game.step(room);
-    if (room.overtime && scorers.length) {
-      return finish(room, scorers[0], 'Altın gol! Uzatmada ilk sayıyı yapan kazandı.');
-    }
-    if (!room.overtime && now >= room.endsAt) {
-      const [a, b] = room.snakes;
-      if (a.score !== b.score) return finish(room, a.score > b.score ? a.id : b.id, 'Süre doldu.');
-      if (room.lastScorer) return finish(room, room.lastScorer, 'Skor berabere, son sayıyı yapan kazandı.');
-      room.overtime = true; // 0-0: altın gol
+    const scorers = game.step(room, now);
+    if (room.overtime) {
+      // Altın gol: sadece boyu rakipten UZUN olan kobranın sayısı maçı bitirir
+      for (const id of scorers) {
+        const s = room.snakes.find(x => x.id === id), o = room.snakes.find(x => x.id !== id);
+        if (game.lengthOf(s) > game.lengthOf(o)) return finish(room, id, 'Altın gol! Daha uzun kobrayla sayı yapan kazandı.');
+        room.events.push({ type: 'goldenNo', id });
+      }
+      if (now - room.overtimeStart >= OVERTIME_MAX_MS) {
+        const [a, b] = room.snakes, la = game.lengthOf(a), lb = game.lengthOf(b);
+        if (la !== lb) return finish(room, la > lb ? a.id : b.id, 'Uzatma bitti, daha uzun kobra kazandı.');
+        return finish(room, null, 'Uzatma bitti, berabere.');
+      }
+    } else if (now >= room.endsAt) {
+      const [a, b] = room.snakes, la = game.lengthOf(a), lb = game.lengthOf(b);
+      a.bonus = la > lb ? 1 : 0;       // daha uzun kalan kobraya +1 puan
+      b.bonus = lb > la ? 1 : 0;
+      const fa = a.score + a.bonus, fb = b.score + b.bonus;
+      const bonusText = a.bonus || b.bonus ? ` ${(a.bonus ? a : b).name} daha uzun kaldığı için +1 puan aldı.` : '';
+      if (fa !== fb) return finish(room, fa > fb ? a.id : b.id, 'Süre doldu.' + bonusText);
+      if (room.lastScorer) return finish(room, room.lastScorer, 'Skor berabere, son sayıyı yapan kazandı.' + bonusText);
+      room.overtime = true;            // 0-0 ve boylar eşit: altın gol
+      room.overtimeStart = now;
+      room.events.push({ type: 'overtime' });
     }
   }
   broadcast(room, now);
 }
 
-// Ağ trafiğini azaltmak için yemler sadece değiştiğinde gönderilir
+// Kompakt durum mesajı: gövde hücre numarası (y*COLS+x) dizisi olarak gider
 function broadcast(room, now) {
+  const C = game.COLS;
   const msg = {
     t: room.target,
-    s: room.snakes.map(s => ({ id: s.id, name: s.name, color: s.color, body: s.body, value: s.value, op: s.op, score: s.score })),
+    s: room.snakes.map(s => ({
+      b: s.body.map(p => p.y * C + p.x), v: s.value, o: s.op, sc: s.score, g: s.grow,
+      fz: Math.max(0, s.frozenUntil - now)
+    })),
     cd: Math.max(0, Math.ceil((room.startsAt - now) / 1000)),
     rem: Math.max(0, Math.ceil((room.endsAt - now) / 1000)),
     ot: room.overtime,
     lock: room.resetLockedFor,
     ev: room.events
   };
-  if (room.foodsDirty) { room.foodsVer++; msg.f = room.foods; room.foodsDirty = false; }
-  msg.fv = room.foodsVer;
+  if (room.foodsDirty) { room.foodsVer++; msg.f = room.foods.map(f => [f.y * C + f.x, f.type, f.value]); room.foodsDirty = false; }
   io.to(room.id).emit('state', msg);
   room.events = [];
 }
@@ -117,8 +140,8 @@ function finish(room, winnerSocketId, reason) {
   broadcast(room, Date.now());
   const winner = room.snakes.find(s => s.id === winnerSocketId);
   io.to(room.id).emit('gameOver', {
-    winnerId: winnerSocketId, winnerName: winner ? winner.name : '-', reason,
-    scores: room.snakes.map(s => ({ name: s.name, score: s.score }))
+    winnerId: winner ? winnerSocketId : null, winnerName: winner ? winner.name : null, reason,
+    scores: room.snakes.map(s => ({ name: s.name, score: s.score + s.bonus, bonus: s.bonus, len: game.lengthOf(s) }))
   });
   for (const s of room.snakes) {
     socketRoom.delete(s.id);
@@ -127,7 +150,7 @@ function finish(room, winnerSocketId, reason) {
   }
   rooms.delete(room.id);
   const [a, b] = room.snakes;
-  db.saveMatch({ p1Id: a.userId, p2Id: b.userId, p1Score: a.score, p2Score: b.score,
+  db.saveMatch({ p1Id: a.userId, p2Id: b.userId, p1Score: a.score + a.bonus, p2Score: b.score + b.bonus,
     winnerId: winner ? winner.userId : null, duration: room.duration, reason })
     .catch(e => console.error('Maç kaydedilemedi:', e.message));
   notifyFriendsOf(a.userId); notifyFriendsOf(b.userId);
@@ -297,8 +320,8 @@ io.on('connection', socket => {
     lat = Number(lat); lon = Number(lon);
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return fail(cb, 'Geçersiz konum.');
     socket.data.city = String(city || '').slice(0, 40);
-    let w = fromRaw(raw);                    // tarayıcının çektiği veri
-    if (!w) w = await fetchServer(lat, lon); // yedek: sunucu çeker
+    let w = fromRaw(raw);
+    if (!w) w = await fetchServer(lat, lon);
     socket.data.weather = w;
     ok(cb, { weather: weatherOf(socket) });
   }, false);

@@ -7,16 +7,14 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <title>Cobrunner</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="style.css?v=2">
+  <link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
-  <!-- Bağlantı -->
   <div id="loading" class="panel center screen">
     <img src="logo.svg" alt="Cobrunner" class="logo">
-    <p>Sunucuya bağlanılıyor... (ilk açılışta 1 dakika sürebilir)</p>
+    <p id="loadMsg">Sunucuya bağlanılıyor... (ilk açılışta 1 dakika sürebilir)</p>
   </div>
 
-  <!-- Giriş / kayıt -->
   <div id="auth" class="panel screen hidden">
     <img src="logo.svg" alt="Cobrunner" class="logo">
     <div class="tabs" role="tablist">
@@ -31,7 +29,6 @@
     <p id="authMsg" class="msg" aria-live="polite"></p>
   </div>
 
-  <!-- Lobi -->
   <div id="lobby" class="hidden">
     <header class="topbar">
       <img src="logo.svg" alt="Cobrunner" class="logo-small">
@@ -58,8 +55,8 @@
             </label>
           </div>
         </div>
-        <div class="field">Yılan rengi
-          <div id="colors" class="colors" role="radiogroup" aria-label="Yılan rengi"></div>
+        <div class="field">Kobra rengi
+          <div id="colors" class="colors" role="radiogroup" aria-label="Kobra rengi"></div>
         </div>
         <div class="field">Süre
           <div class="durations">
@@ -74,15 +71,16 @@
         <details class="rules">
           <summary>Nasıl oynanır?</summary>
           <ul>
-            <li>Telefonda alttaki yön tuşlarıyla ya da ekranı kaydırarak, bilgisayarda yön tuşları / WASD ile oyna.</li>
-            <li>Başlangıçta işlemin <b>+</b>. Bir işlem yemi (+ − × ÷) yiyene kadar işlemin değişmez; her sayı bu işlemle değerine eklenir.</li>
-            <li>Örnek: 3 → değer 3; + al, 5 al → 8; tekrar 2 al → 10.</li>
-            <li>Değer eksiye düşmez. 0'dayken − × ÷ işe yaramaz; <b>+</b> alıp sayı toplamalısın. Bölmede sonuç aşağı yuvarlanır.</li>
-            <li>Değerin hedefe eşit olunca 1 puan; değerin 0'a, işlemin +'ya döner.</li>
+            <li>Telefonda alttaki yön tuşlarıyla ya da ekranı kaydırarak, bilgisayarda yön tuşları / WASD ile kobranı yönet.</li>
+            <li>Başlangıçta işlemin <b>+</b>. Yeni bir işlem yemi (+ − × ÷) yiyene kadar her sayı bu işlemle değerine uygulanır. Örnek: 3 → 3; + al, 5 al → 8; 2 al → 10.</li>
+            <li>Değer eksiye düşmez; 0'dayken − × ÷ işe yaramaz, + alıp sayı toplamalısın. Bölmede sonuç aşağı yuvarlanır.</li>
+            <li>Değerin hedefe eşit olunca 1 puan alırsın. Hedef sayı ekranda tek yem olarak çıkmaz, en az iki sayıyla ulaşmalısın.</li>
             <li><b>⟲</b> hedefi yeniler, değerler korunur. Sırayla kullanılır: son kullanan sıradakini yiyemez.</li>
-            <li><b>⚡</b> rakibinin değerini sıfırlar.</li>
-            <li>Duvarlardan karşıya, rakibin içinden geçebilirsin.</li>
-            <li>Berabere biterse son sayıyı yapan kazanır; 0-0 ise altın gol.</li>
+            <li><b>⚡</b> rakibinin değerini sıfırlar. <b>🧊</b> rakibini 5 saniye dondurur; ilk kapan kullanır.</li>
+            <li>Kobranın kafası rakibin gövdesine girerse rakibi o noktadan keser. Kendi kuyruğuna girersen kendin kısalırsın.</li>
+            <li>Duvarlardan karşı tarafa geçebilirsin.</li>
+            <li>Süre bitince daha uzun kalan kobra +1 puan alır. Berabere biterse son sayıyı yapan kazanır.</li>
+            <li>Hiç sayı yoksa altın gole geçilir: sayıyı yapan kobra rakibinden uzunsa maç biter, kısaysa oyun devam eder.</li>
             <li>Harita, bulunduğun yerin anlık havasına göre değişir.</li>
           </ul>
         </details>
@@ -119,7 +117,6 @@
     <p class="credit muted">Hava verisi: <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> · Konum: BigDataCloud</p>
   </div>
 
-  <!-- Davet -->
   <div id="inviteModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="inviteText">
     <div class="panel center">
       <p id="inviteText"></p>
@@ -130,7 +127,6 @@
     </div>
   </div>
 
-  <!-- Oyun -->
   <div id="game" class="hidden">
     <div id="hud">
       <div id="p0" class="pinfo"><div class="pname"></div><div class="pscore">0</div><div class="pval"></div></div>
@@ -142,8 +138,9 @@
       <div id="p1" class="pinfo"><div class="pname"></div><div class="pscore">0</div><div class="pval"></div></div>
     </div>
     <div id="myBar">
-      <span>Değerin <b id="myVal">0</b></span>
-      <span>İşlemin <b id="myOp" class="opchip">+</b></span>
+      <span>Değer <b id="myVal">0</b></span>
+      <span>İşlem <b id="myOp" class="opchip">+</b></span>
+      <span>Boy <b id="myLen">3</b></span>
       <span id="resetInfo"></span>
       <button id="muteBtn" type="button" class="mini" aria-label="Sesi aç/kapat">🔊</button>
     </div>
@@ -168,6 +165,6 @@
   <div id="toast" class="toast hidden" aria-live="polite"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="client.js?v=3"></script>
+  <script src="client.js?v=5"></script>
 </body>
 </html>

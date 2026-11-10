@@ -1,18 +1,21 @@
-// Cobrunner oyun kuralları (sunucudan bağımsız, test edilebilir saf mantık)
-const COLS = 18, ROWS = 24;        // mobil dikey ekrana uygun, okunaklı ızgara
+// Cobrunner oyun kuralları (ağdan bağımsız, test edilebilir saf mantık)
+const COLS = 18, ROWS = 24;          // mobil dikey ekrana uygun ızgara
 const START_LEN = 3;
-const FOOD_COUNT = 10;
-const MAX_FOODS = 14;              // ekran kalabalıklaşmasın
-const TARGET_MIN = 10, TARGET_MAX = 50;
+const FOOD_COUNT = 10;               // normal yem sayısı
+const MAX_FOODS = 15;                // ekran kalabalıklaşmasın
+const TARGET_MIN = 15, TARGET_MAX = 60;
+const NUM_MIN = 1, NUM_MAX = 12;     // ekrandaki sayı yemleri bu aralıkta
 const VALUE_LIMIT = 9999;
+const FREEZE_MS = 5000;              // 🧊 dondurma süresi
 const OPS = ['+', '-', 'x', '/'];
 const DIRS = { up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 } };
 const OPPOSITE = { up: 'down', down: 'up', left: 'right', right: 'left' };
 
 const rnd = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
+const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = rnd(0, i); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const lengthOf = s => s.body.length + s.grow;
 
 // İşlem kuralları: eksiye düşmez, bölmede aşağı yuvarlanır, üst sınır 9999.
-// 0 iken − × ÷ değeri 0'da bırakır; büyümek için + gerekir.
 function applyOp(v, op, n) {
   let r = v;
   if (op === '+') r = v + n;
@@ -23,6 +26,7 @@ function applyOp(v, op, n) {
 }
 
 // ---------- Yemler ----------
+let foodSeq = 0;
 function isOccupied(room, x, y) {
   if (room.foods.some(f => f.x === x && f.y === y)) return true;
   return room.snakes.some(s => s.body.some(p => p.x === x && p.y === y));
@@ -35,80 +39,115 @@ function freeCell(room) {
   return { x: rnd(0, COLS - 1), y: rnd(0, ROWS - 1) };
 }
 function addFood(room, spec) {
-  room.foods.push({ ...freeCell(room), ...spec });
+  const f = { id: ++foodSeq, ...freeCell(room), ...spec };
+  room.foods.push(f);
   room.foodsDirty = true;
+  return f;
 }
+const SPECIALS = ['reset', 'zap', 'freeze']; // ⟲ hedef yenile, ⚡ rakibi sıfırla, 🧊 rakibi dondur
 function randomFoodSpec(room) {
   const r = Math.random();
-  const has = t => room.foods.some(f => f.type === t);
-  if (r < 0.60) return { type: 'num', value: rnd(1, 12) };
-  if (r < 0.88) return { type: 'op', value: OPS[rnd(0, 3)] };
-  if (r < 0.94 && !has('reset')) return { type: 'reset' };            // ⟲ hedefi yenile
-  if (r >= 0.94 && !has('zap')) return { type: 'zap' };               // ⚡ rakibi sıfırla
-  return { type: 'num', value: rnd(1, 12) };
+  if (r < 0.58) return { type: 'num', value: rnd(NUM_MIN, NUM_MAX) };
+  if (r < 0.86) return { type: 'op', value: OPS[rnd(0, 3)] };
+  const free = SPECIALS.filter(t => !room.foods.some(f => f.type === t)); // her özel yemden en fazla 1
+  if (free.length) return { type: free[rnd(0, free.length - 1)] };
+  return { type: 'num', value: rnd(NUM_MIN, NUM_MAX) };
 }
 function refillFoods(room) {
-  while (room.foods.length < FOOD_COUNT) addFood(room, randomFoodSpec(room));
+  let normal = room.foods.filter(f => f.type === 'num' || f.type === 'op').length;
+  while (normal < FOOD_COUNT) { const f = addFood(room, randomFoodSpec(room)); if (f.type === 'num' || f.type === 'op') normal++; }
 }
 
 // ---------- Hedefe ulaşılabilirlik ----------
-// İşlem kalıcıdır: sayı yenince son alınan işlem uygulanır, işlem değişmez.
-function canReach(value, op, foods, target, depth, used = 0) {
-  if (depth === 0) return false;
+// İşlem kalıcıdır: yeni işlem yemi alınana kadar her sayı son işlemle uygulanır.
+function canReach(v, op, foods, t, depth, used = 0, lastWasOp = false) {
   for (let i = 0; i < foods.length; i++) {
     if (used & (1 << i)) continue;
     const f = foods[i];
-    let v = value, o = op;
-    if (f.type === 'num') { v = applyOp(value, op, f.value); if (v === target) return true; }
-    else o = f.value;
-    if (canReach(v, o, foods, target, depth - 1, used | (1 << i))) return true;
+    if (f.type === 'op') {
+      if (lastWasOp || f.value === op || depth < 2) continue; // art arda iki işlem anlamsız
+      if (canReach(v, f.value, foods, t, depth - 1, used | (1 << i), true)) return true;
+    } else {
+      const nv = applyOp(v, op, f.value);
+      if (nv === t) return true;
+      if (depth > 1 && nv !== v && canReach(nv, op, foods, t, depth - 1, used | (1 << i), false)) return true;
+    }
   }
   return false;
 }
-// Verilen işlemle tek sayıda hedefe götüren sayı (1-99)
-function neededNumber(v, op, t) {
-  let n = null;
-  if (op === '+') n = t - v;
-  else if (op === '-') n = v - t;
-  else if (op === 'x') { if (v > 0 && t % v === 0) n = t / v; }
-  else if (op === '/') { if (t > 0) n = Math.floor(v / t); }
-  if (n !== null && Number.isInteger(n) && n >= 1 && n <= 99 && applyOp(v, op, n) === t) return n;
-  return null;
-}
-const opOrder = cur => [cur, ...OPS.filter(o => o !== cur)];
-// Değerden hedefe giden kısa bir yem listesi üretir
+
+// Hedefe giden yol üretir. Kurallar: en az 2 sayı yemi gerekir (hedef sayı tek yemle "hazır" çıkmaz),
+// sayılar 1-12 aralığında, mümkün olan en kısa yol; aynı uzunluktaki yollar arasından rastgele.
 function planPath(v, op, t) {
-  for (const o of opOrder(op)) {
-    const n = neededNumber(v, o, t);
-    if (n !== null) return [...(o !== op ? [{ type: 'op', value: o }] : []), { type: 'num', value: n }];
-  }
-  for (const o1 of opOrder(op)) {
-    for (let n1 = 1; n1 <= 99; n1++) {
-      const v1 = applyOp(v, o1, n1);
-      for (const o2 of opOrder(o1)) {
-        const n2 = neededNumber(v1, o2, t);
-        if (n2 !== null) return [
-          ...(o1 !== op ? [{ type: 'op', value: o1 }] : []), { type: 'num', value: n1 },
-          ...(o2 !== o1 ? [{ type: 'op', value: o2 }] : []), { type: 'num', value: n2 }];
+  for (let maxLen = 2; maxLen <= 8; maxLen++) {
+    const failed = new Set();
+    const path = [];
+    const dfs = (val, cur, nums, rem, lastOp) => {
+      const key = val + cur + rem + (nums >= 2 ? 2 : nums) + lastOp;
+      if (failed.has(key)) return false;
+      const moves = [];
+      for (let n = NUM_MIN; n <= NUM_MAX; n++) moves.push(['num', n]);
+      if (!lastOp && rem >= 2) for (const o of OPS) if (o !== cur) moves.push(['op', o]);
+      for (const [type, value] of shuffle(moves)) {
+        if (type === 'num') {
+          const nv = applyOp(val, cur, value);
+          if (nv === t) {
+            if (nums + 1 >= 2) { path.push({ type, value }); return true; }
+            continue; // tek yemde hedef = çok kolay, izin verme
+          }
+          if (rem > 1 && nv !== val) {
+            path.push({ type, value });
+            if (dfs(nv, cur, nums + 1, rem - 1, false)) return true;
+            path.pop();
+          }
+        } else {
+          path.push({ type, value });
+          if (dfs(val, value, nums, rem - 1, true)) return true;
+          path.pop();
+        }
       }
-    }
+      failed.add(key);
+      return false;
+    };
+    if (dfs(v, op, 0, maxLen, false)) return path;
   }
-  return [{ type: 'op', value: '+' }, { type: 'num', value: t }]; // pratikte buraya gelinmez
+  // Pratikte buraya gelinmez: sıfırdan başlayan güvenli yol
+  const a = Math.max(1, Math.min(NUM_MAX, t - 1));
+  return [{ type: 'op', value: '/' }, { type: 'num', value: 12 }, { type: 'num', value: 12 }, { type: 'num', value: 12 },
+    { type: 'num', value: 12 }, { type: 'op', value: '+' }, { type: 'num', value: a }, { type: 'num', value: t - a }];
 }
-function ensureReachable(room) {
-  for (const s of room.snakes) {
-    const usable = room.foods.filter(f => f.type === 'num' || f.type === 'op').slice(0, 16);
-    if (canReach(s.value, s.op, usable, room.target, 3)) continue;
-    for (const spec of planPath(s.value, s.op, room.target)) addFood(room, spec);
-  }
-  // Fazla yem birikirse en eski sıradan yemleri kaldır (yeni eklenen yol yemleri sondadır)
-  let i = 0;
-  while (room.foods.length > MAX_FOODS && i < room.foods.length) {
-    if (room.foods[i].type === 'num' || room.foods[i].type === 'op') { room.foods.splice(i, 1); room.foodsDirty = true; }
+
+// Oyuncunun önceden hazırlanmış yolu hâlâ geçerli mi? (kalan yol yemleri sırayla yenirse hedefe varır mı)
+function planStillValid(room, s) {
+  if (!s.plan) return false;
+  const rest = s.plan.map(id => room.foods.find(f => f.id === id)).filter(Boolean);
+  if (!rest.length) return false;
+  let v = s.value, op = s.op;
+  for (const f of rest) { if (f.type === 'op') op = f.value; else v = applyOp(v, op, f.value); }
+  return v === room.target;
+}
+
+function trimFoods(room) {
+  // Fazla yem birikirse, hiçbir oyuncunun yolunda olmayan en eski sıradan yemleri kaldır
+  const keep = new Set(room.snakes.flatMap(s => s.plan || []));
+  for (let i = 0; room.foods.length > MAX_FOODS && i < room.foods.length;) {
+    const f = room.foods[i];
+    if ((f.type === 'num' || f.type === 'op') && !keep.has(f.id)) { room.foods.splice(i, 1); room.foodsDirty = true; }
     else i++;
   }
 }
-// Yeni hedef: eskisiyle ve oyuncuların anlık değerleriyle aynı olmasın
+// Önce fazlalık temizlenir, sonra her oyuncu için hedefe ulaşılabilirlik kontrol edilir
+function ensureReachable(room) {
+  for (const s of room.snakes) if (!planStillValid(room, s)) s.plan = null;
+  trimFoods(room);
+  for (const s of room.snakes) {
+    if (s.plan) continue;
+    const usable = room.foods.filter(f => f.type === 'num' || f.type === 'op').slice(0, 20);
+    if (canReach(s.value, s.op, usable, room.target, 5)) continue;
+    s.plan = planPath(s.value, s.op, room.target).map(spec => addFood(room, spec).id);
+  }
+}
+
 function newTarget(room) {
   const avoid = new Set([room.target, ...room.snakes.map(s => s.value)]);
   let t;
@@ -118,11 +157,11 @@ function newTarget(room) {
 
 // ---------- Oda ----------
 function createSnake(p, idx) {
-  const start = idx === 0 ? { x: 5, y: 5, dir: 'right', dx: -1 } : { x: COLS - 6, y: ROWS - 6, dir: 'left', dx: 1 };
+  const st = idx === 0 ? { x: 5, y: 5, dir: 'right', dx: -1 } : { x: COLS - 6, y: ROWS - 6, dir: 'left', dx: 1 };
   const body = [];
-  for (let i = 0; i < START_LEN; i++) body.push({ x: start.x + start.dx * i, y: start.y });
-  return { id: p.id, userId: p.userId, name: p.name, color: p.color, body, dir: start.dir, nextDir: start.dir,
-    value: 0, op: '+', score: 0, grow: 0 };
+  for (let i = 0; i < START_LEN; i++) body.push({ x: st.x + st.dx * i, y: st.y });
+  return { id: p.id, userId: p.userId, name: p.name, color: p.color, body, dir: st.dir, nextDir: st.dir,
+    value: 0, op: '+', score: 0, grow: 0, frozenUntil: 0, plan: null, bonus: 0 };
 }
 function createGame(p1, p2) {
   const room = { snakes: [createSnake(p1, 0), createSnake(p2, 1)], foods: [], foodsDirty: true,
@@ -133,19 +172,20 @@ function createGame(p1, p2) {
   return room;
 }
 
-// Yem yeme. Dönüş: altın gol vb. için skor yapan oyuncu id'si (varsa)
-function eat(room, s, index) {
+// Yem yeme. Dönüş: sayı yapıldıysa oyuncu id'si
+function eat(room, s, index, now) {
   const f = room.foods.splice(index, 1)[0];
   room.foodsDirty = true;
   s.grow += 1;
   let scored = null;
+  const other = room.snakes.find(x => x !== s);
   if (f.type === 'num') {
-    s.value = applyOp(s.value, s.op, f.value);           // işlem kalıcı, değişmez
+    s.value = applyOp(s.value, s.op, f.value);
     room.events.push({ type: 'num', id: s.id });
     if (s.value === room.target) {
       s.score += 1;
       room.lastScorer = s.id;
-      s.value = 0; s.op = '+';                           // yeni tura temiz başla
+      s.value = 0; s.op = '+';
       room.target = newTarget(room);
       room.events.push({ type: 'score', id: s.id });
       scored = s.id;
@@ -153,37 +193,61 @@ function eat(room, s, index) {
   } else if (f.type === 'op') {
     s.op = f.value;
     room.events.push({ type: 'op', id: s.id });
-  } else if (f.type === 'reset') {                        // ⟲ değerler korunur, hedef değişir
+  } else if (f.type === 'reset') {              // ⟲ değerler korunur, hedef değişir (sırayla)
     room.target = newTarget(room);
     room.resetLockedFor = s.id;
     room.events.push({ type: 'reset', id: s.id });
-  } else if (f.type === 'zap') {                          // ⚡ rakibin değeri sıfırlanır
-    const other = room.snakes.find(x => x !== s);
+  } else if (f.type === 'zap') {                // ⚡ rakibin değeri sıfırlanır
     other.value = 0; other.op = '+';
-    room.events.push({ type: 'zap', id: s.id, victim: other.id });
+    room.events.push({ type: 'zap', id: s.id });
+  } else if (f.type === 'freeze') {             // 🧊 rakip 5 sn donar (ilk alan kullanır)
+    other.frozenUntil = now + FREEZE_MS;
+    room.events.push({ type: 'freeze', id: s.id });
   }
   refillFoods(room);
   ensureReachable(room);
   return scored;
 }
 
-function canEat(room, s, f) {
-  return !(f.type === 'reset' && room.resetLockedFor === s.id);
-}
+const canEat = (room, s, f) => !(f.type === 'reset' && room.resetLockedFor === s.id);
+const same = (a, b) => a.x === b.x && a.y === b.y;
 
 // Bir adım ilerlet. Dönüş: bu adımda sayı yapan oyuncu id'leri
-function step(room) {
+function step(room, now) {
+  const moved = [];
   for (const s of room.snakes) {
+    if (s.frozenUntil > now) continue;           // donmuş kobra hareket etmez
     s.dir = s.nextDir;
     const d = DIRS[s.dir], h = s.body[0];
     s.body.unshift({ x: (h.x + d.x + COLS) % COLS, y: (h.y + d.y + ROWS) % ROWS }); // duvardan karşıya
     if (s.grow > 0) s.grow--; else s.body.pop();
+    moved.push(s);
   }
-  const scorers = [];
-  for (const s of room.snakes) { // yılanlar birbirinin içinden geçebilir
+  // Çarpışmalar: önce hepsi hesaplanır, sonra uygulanır (aynı anda ısırma adil olsun)
+  const cuts = new Map(); // kobra -> { at, by }
+  const setCut = (victim, at, by) => { const c = cuts.get(victim); if (!c || at < c.at) cuts.set(victim, { at, by }); };
+  for (const s of moved) {
     const h = s.body[0];
-    const i = room.foods.findIndex(f => f.x === h.x && f.y === h.y && canEat(room, s, f));
-    if (i >= 0) { const sc = eat(room, s, i); if (sc) scorers.push(sc); }
+    for (let i = 1; i < s.body.length; i++) if (same(s.body[i], h)) { setCut(s, i, s); break; }   // kendi kuyruğu
+    const o = room.snakes.find(x => x !== s);
+    for (let j = 0; j < o.body.length; j++) {
+      if (!same(o.body[j], h)) continue;
+      if (j > 0) setCut(o, j, s);                 // rakibi ısırdığı yerden keser; kafa kafaya olursa bir şey olmaz
+      break;
+    }
+  }
+  for (const [victim, { at, by }] of cuts) {
+    const lost = victim.body.length - at;
+    victim.body.length = at;
+    victim.grow = 0;
+    room.events.push({ type: by === victim ? 'selfcut' : 'bite', id: by.id, victim: victim.id, n: lost });
+  }
+  // Yem
+  const scorers = [];
+  for (const s of moved) {
+    const h = s.body[0];
+    const i = room.foods.findIndex(f => same(f, h) && canEat(room, s, f));
+    if (i >= 0) { const sc = eat(room, s, i, now); if (sc) scorers.push(sc); }
   }
   return scorers;
 }
@@ -194,4 +258,4 @@ function setDir(room, id, dir) {
   if (s && OPPOSITE[s.dir] !== dir) s.nextDir = dir;
 }
 
-module.exports = { COLS, ROWS, OPS, applyOp, planPath, canReach, createGame, step, eat, setDir, ensureReachable, refillFoods };
+module.exports = { COLS, ROWS, OPS, FREEZE_MS, applyOp, planPath, canReach, createGame, step, eat, setDir, ensureReachable, lengthOf };

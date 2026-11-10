@@ -1,15 +1,19 @@
 // Cobrunner istemcisi
-const socket = io();
+// Varsayılan taşıma (önce HTTP, sonra WebSocket'e yükseltme): WebSocket'i engelleyen ağlarda da bağlanır
+const socket = io({ timeout: 15000 });
 const $ = id => document.getElementById(id);
-const canvas = $('board'), ctx = canvas.getContext('2d');
+const canvas = $('board'), ctx = canvas.getContext('2d', { alpha: false });
 const PALETTE = ['#22c55e', '#3b82f6', '#ef4444', '#eab308', '#a855f7', '#ec4899', '#f97316', '#06b6d4'];
 const OP_SYMBOL = { '+': '+', '-': '−', 'x': '×', '/': '÷' };
 const isTouch = window.matchMedia('(pointer: coarse)').matches;
+const FONT = '-apple-system, system-ui, sans-serif';
 
-let me = null, state = null, foods = [], cols = 18, rows = 24, cell = 20, dpr = 1, lastCountdown = 0;
-let authMode = 'login', currentInvite = null, matchWeather = {};
+let me = null, state = null, foods = [], players = [], cols = 18, rows = 24, cell = 20, dpr = 1, lastCountdown = 0;
+let authMode = 'login', currentInvite = null, matchWeather = {}, lastTarget = null;
 
-const call = (event, data = {}) => new Promise(res => socket.emit(event, data, res));
+// Sunucu yanıt vermezse sonsuza kadar beklemesin
+const call = (event, data = {}) => new Promise(res =>
+  socket.timeout(15000).emit(event, data, (err, r) => res(err ? { ok: false, error: 'Sunucu yanıt vermedi, tekrar dene.' } : r)));
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const duration = () => Number(document.querySelector('input[name=dur]:checked').value);
 function show(id) {
@@ -22,8 +26,7 @@ function toast(text) {
   $('toast').textContent = text; $('toast').classList.remove('hidden');
   clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.add('hidden'), 3500);
 }
-// Değişmeyen DOM'a dokunmamak için (performans)
-function setText(el, v) { v = String(v); if (el.textContent !== v) el.textContent = v; }
+function setText(el, v) { v = String(v); if (el.textContent !== v) el.textContent = v; } // gereksiz DOM yazımı yok
 
 // ================= Sesler (Web Audio, dosya gerekmez) =================
 let audioCtx = null, muted = localStorage.getItem('cb_muted') === '1';
@@ -48,8 +51,10 @@ const SOUNDS = {
   num: mine => playTone(mine ? 600 : 420, 0.08, 'sine', mine ? 0.18 : 0.07),
   op: mine => playTone(mine ? 820 : 560, 0.07, 'square', mine ? 0.08 : 0.04),
   reset: mine => playTone(mine ? 300 : 900, 0.35, 'sawtooth', 0.08, 0, mine ? 900 : 300),
-  zap: mine => mine ? [880, 1320].forEach((f, i) => playTone(f, 0.12, 'square', 0.1, i * 0.08))
-                    : playTone(500, 0.5, 'sawtooth', 0.12, 0, 80),
+  zap: mine => mine ? [880, 1320].forEach((f, i) => playTone(f, 0.12, 'square', 0.1, i * 0.08)) : playTone(500, 0.5, 'sawtooth', 0.12, 0, 80),
+  freeze: mine => mine ? [1568, 2093, 2637].forEach((f, i) => playTone(f, 0.1, 'triangle', 0.1, i * 0.06)) : playTone(1200, 0.6, 'sine', 0.12, 0, 200),
+  bite: mine => playTone(mine ? 260 : 160, 0.15, 'square', 0.12, 0, mine ? 520 : 80),
+  selfcut: () => playTone(220, 0.2, 'triangle', 0.12, 0, 110),
   score: mine => (mine ? [523, 659, 784, 1047] : [392, 330, 262]).forEach((f, i) => playTone(f, 0.14, 'triangle', 0.18, i * 0.1)),
   win: () => [523, 659, 784, 1047, 1319].forEach((f, i) => playTone(f, 0.2, 'triangle', 0.2, i * 0.13)),
   lose: () => [440, 392, 330, 262].forEach((f, i) => playTone(f, 0.25, 'sine', 0.18, i * 0.16)),
@@ -60,8 +65,18 @@ function updateMuteBtn() { $('muteBtn').textContent = muted ? '🔇' : '🔊'; }
 $('muteBtn').addEventListener('click', () => { muted = !muted; localStorage.setItem('cb_muted', muted ? '1' : '0'); updateMuteBtn(); });
 updateMuteBtn();
 
-// ================= Oturum =================
+// ================= Bağlantı ve oturum =================
+let connectTries = 0;
+function setLoadMsg(t) { setText($('loadMsg'), t); }
+socket.on('connect_error', err => {
+  connectTries++;
+  setLoadMsg(connectTries < 3
+    ? `Sunucu uyanıyor olabilir, bekleniyor... (deneme ${connectTries})`
+    : `Sunucuya bağlanılamıyor (${(err && err.message) || 'bilinmeyen hata'}). Deneme ${connectTries}. Sayfayı yenilemeyi dene.`);
+});
 socket.on('connect', async () => {
+  connectTries = 0;
+  setLoadMsg('Bağlandı, oturum kontrol ediliyor...');
   const token = localStorage.getItem('cb_token');
   if (token) {
     const r = await call('resume', { token });
@@ -70,7 +85,7 @@ socket.on('connect', async () => {
   }
   show('auth');
 });
-socket.on('disconnect', () => { if (!state) show('loading'); });
+socket.on('disconnect', () => { if (!state) { show('loading'); setLoadMsg('Bağlantı koptu, yeniden bağlanılıyor...'); } });
 socket.on('kicked', msg => { localStorage.removeItem('cb_token'); me = null; state = null; show('auth'); setMsg($('authMsg'), msg); });
 
 function setAuthMode(mode) {
@@ -112,7 +127,7 @@ function enterLobby(r) {
   loadSocial();
   loadStats();
   if (!weatherStarted) { weatherStarted = true; initWeather(false); }
-  else if (myLocation) sendWeather(); // yeniden bağlanınca sunucuya tekrar bildir
+  else if (myLocation) sendWeather().catch(() => {});
 }
 
 // ================= Renk =================
@@ -222,16 +237,16 @@ async function loadStats() {
   const s = r.stats;
   $('myStats').innerHTML = [['Maç', s.games], ['Galibiyet', s.wins], ['Mağlubiyet', s.losses], ['Toplam sayı', s.points], ['En iyi maç', s.best],
     ['Kazanma %', s.games ? Math.round(100 * s.wins / s.games) : 0]].map(([k, v]) => `<div><b>${v}</b><span>${k}</span></div>`).join('');
-  $('recent').innerHTML = r.recent.length ? r.recent.map(m =>
-    `<li><span class="${m.won ? 'win' : 'loss'}">${m.won ? 'G' : 'M'}</span><span class="name">${esc(m.opponent)}</span><b>${m.myScore} - ${m.oppScore}</b><small class="muted">${m.duration / 60} dk</small></li>`).join('')
-    : '<li class="muted">Henüz maç yok.</li>';
+  $('recent').innerHTML = r.recent.length ? r.recent.map(m => {
+    const [cls, ch] = m.draw ? ['draw', 'B'] : m.won ? ['win', 'G'] : ['loss', 'M'];
+    return `<li><span class="${cls}">${ch}</span><span class="name">${esc(m.opponent)}</span><b>${m.myScore} - ${m.oppScore}</b><small class="muted">${m.duration / 60} dk</small></li>`;
+  }).join('') : '<li class="muted">Henüz maç yok.</li>';
   $('leaderboard').innerHTML = r.leaderboard.length ? r.leaderboard.map(u => `<li>${esc(u.username)} — <b>${u.wins}</b> galibiyet</li>`).join('')
     : '<li class="muted">Henüz kimse kazanmadı.</li>';
 }
 
 // ================= Konum ve hava durumu =================
-// Sıra: GPS → IP konumu (BigDataCloud) → IP konumu (GeoJS) → İstanbul.
-// Hava verisini tarayıcı çeker (Open-Meteo), olmazsa sunucu dener.
+// Sıra: GPS → IP konumu (BigDataCloud) → IP konumu (GeoJS) → İstanbul. Hava: tarayıcı (Open-Meteo), olmazsa sunucu.
 let myLocation = null, wxLoading = false;
 const DEFAULT_LOC = { lat: 41.01, lon: 28.98, city: 'İstanbul', source: 'default' };
 
@@ -287,7 +302,6 @@ async function sendWeather() {
   if (!r.ok) throw new Error(r.error);
   if ($('wxDemo').value) await applyDemo(); else setMyWeather(r.weather);
 }
-// useGps: kullanıcı düğmeye bastığında GPS izni istenir (Safari için en sağlıklısı)
 async function initWeather(useGps) {
   if (wxLoading) return;
   wxLoading = true;
@@ -320,23 +334,23 @@ $('wxRefresh').addEventListener('click', () => initWeather(true));
 $('wxDemo').addEventListener('change', applyDemo);
 const wxText = w => w ? `${w.icon} ${w.city ? w.city.split(',')[0] + ' · ' : ''}${w.label}${w.temp !== undefined ? ' ' + w.temp + '°C' : ''}` : '';
 
-// ================= Çizim katmanları (performans için önbellekli) =================
-// 1) Arka plan + ızgara + sabit hava süsleri tek seferde ayrı bir canvas'a çizilir.
-// 2) Yem görselleri bir kez çizilip önbellekten kopyalanır.
-// 3) Her karede sadece: arka plan kopyası + yemler + yılanlar + hafif parçacıklar.
+// ================= Çizim (önbellekli katmanlar) =================
+// Arka plan, ızgara, yem ve etiket görselleri bir kez çizilip kopyalanır.
+// Hareketli hava efekti yoksa ekran sadece sunucudan yeni durum geldiğinde (~8/sn) yeniden çizilir.
 const SCENES = {
   sunny:  ['#14532d', '#166534'], night: ['#020617', '#0b1338'], cloudy: ['#1f2937', '#374151'],
   fog:    ['#334155', '#475569'], rain:  ['#0c1a2e', '#1e3a5f'], snow:   ['#1e293b', '#3b4f6b'],
   storm:  ['#030712', '#1e1b4b'], none:  ['#111827', '#111827']
 };
+const ANIMATED = new Set(['rain', 'storm', 'snow', 'cloudy', 'fog']);
 let theme = 'none', bgLayer = null, cloudSprite = null, parts = [], flash = 0, frame = 0;
-const foodCache = new Map();
-const mkCanvas = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+const spriteCache = new Map();
+const mkCanvas = (w, h) => { const c = document.createElement('canvas'); c.width = Math.max(1, w); c.height = Math.max(1, h); return c; };
 
 function buildBackground() {
   const W = cols * cell, H = rows * cell;
   bgLayer = mkCanvas(Math.round(W * dpr), Math.round(H * dpr));
-  const b = bgLayer.getContext('2d');
+  const b = bgLayer.getContext('2d', { alpha: false });
   b.scale(dpr, dpr);
   const [c1, c2] = SCENES[theme];
   const g = b.createLinearGradient(0, 0, 0, H);
@@ -359,14 +373,12 @@ function buildBackground() {
   } else if (theme === 'fog') {
     b.fillStyle = 'rgba(226,232,240,0.10)'; b.fillRect(0, 0, W, H);
   }
-  // Izgara: tek path, tek stroke
   b.strokeStyle = 'rgba(255,255,255,0.06)'; b.lineWidth = 1;
   b.beginPath();
   for (let x = 0; x <= cols; x++) { b.moveTo(x * cell + 0.5, 0); b.lineTo(x * cell + 0.5, H); }
   for (let y = 0; y <= rows; y++) { b.moveTo(0, y * cell + 0.5); b.lineTo(W, y * cell + 0.5); }
   b.stroke();
 
-  // Bulut / sis sprite'ı (bir kez)
   const R = Math.round(cell * 5 * dpr);
   cloudSprite = mkCanvas(R * 2, R * 2);
   const cg = cloudSprite.getContext('2d');
@@ -374,42 +386,62 @@ function buildBackground() {
   gr.addColorStop(0, `rgba(226,232,240,${theme === 'fog' ? 0.28 : 0.16})`); gr.addColorStop(1, 'rgba(226,232,240,0)');
   cg.fillStyle = gr; cg.fillRect(0, 0, R * 2, R * 2);
 
-  // Parçacıklar: alana göre ölçeklenir
-  const area = cols * rows, Rn = Math.random;
-  const n = { rain: area * 0.22, storm: area * 0.3, snow: area * 0.14, cloudy: 5, fog: 6 }[theme] || 0;
+  // Parçacık sayısı alana göre; telefonda yarıya iner
+  const k = isTouch ? 0.5 : 1, area = cols * rows, Rn = Math.random;
+  const n = Math.round(({ rain: area * 0.22, storm: area * 0.3, snow: area * 0.14, cloudy: 5, fog: 6 }[theme] || 0) * (theme === 'cloudy' || theme === 'fog' ? 1 : k));
   parts = [];
   for (let i = 0; i < n; i++) {
     if (theme === 'rain' || theme === 'storm') parts.push({ x: Rn() * W, y: Rn() * H, v: (0.5 + Rn() * 0.4) * cell, l: (0.5 + Rn() * 0.5) * cell });
     else if (theme === 'snow') parts.push({ x: Rn() * W, y: Rn() * H, v: 0.05 * cell + Rn() * 0.06 * cell, r: 1.5 + Rn() * 2, p: Rn() * 6 });
     else parts.push({ x: Rn() * W, y: Rn() * H, v: 0.02 * cell + Rn() * 0.03 * cell });
   }
-  foodCache.clear();
+  spriteCache.clear();
 }
 
 const FOOD_STYLE = {
-  num:   { bg: '#f8fafc', fg: '#0f172a' },
-  op:    { bg: '#f97316', fg: '#ffffff' },
-  reset: { bg: '#a855f7', fg: '#ffffff' },
-  zap:   { bg: '#dc2626', fg: '#fde047' }
+  num:    { bg: '#f8fafc', fg: '#0f172a' },
+  op:     { bg: '#f97316', fg: '#ffffff' },
+  reset:  { bg: '#a855f7', fg: '#ffffff' },
+  zap:    { bg: '#dc2626', fg: '#fde047' },
+  freeze: { bg: '#0ea5e9', fg: '#ffffff' }
 };
-function foodSprite(f, dim) {
-  const label = f.type === 'num' ? String(f.value) : f.type === 'op' ? OP_SYMBOL[f.value] : f.type === 'reset' ? '⟲' : '⚡';
-  const key = f.type + label + (dim ? 'd' : '');
-  let c = foodCache.get(key);
+const FOOD_LABEL = { reset: '⟲', zap: '⚡', freeze: '🧊' };
+function foodSprite(type, value, dim) {
+  const label = type === 'num' ? String(value) : type === 'op' ? OP_SYMBOL[value] : FOOD_LABEL[type];
+  const key = 'f' + type + label + (dim ? 'd' : '');
+  let c = spriteCache.get(key);
   if (c) return c;
   const S = Math.round(cell * dpr);
   c = mkCanvas(S, S);
   const g = c.getContext('2d');
-  const st = FOOD_STYLE[f.type];
+  const st = FOOD_STYLE[type];
   g.globalAlpha = dim ? 0.3 : 1;
   g.fillStyle = st.bg;
   g.beginPath(); g.arc(S / 2, S / 2, S * 0.48, 0, 7); g.fill();
-  if (f.type === 'zap' || f.type === 'reset') { g.lineWidth = Math.max(1, S * 0.07); g.strokeStyle = '#fff'; g.stroke(); }
+  if (type !== 'num' && type !== 'op') { g.lineWidth = Math.max(1, S * 0.07); g.strokeStyle = '#fff'; g.stroke(); }
   g.fillStyle = st.fg;
   g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.font = `900 ${Math.round(S * (label.length > 1 ? 0.52 : 0.68))}px -apple-system, system-ui, sans-serif`;
+  g.font = `900 ${Math.round(S * (label.length > 1 && type === 'num' ? 0.52 : 0.62))}px ${FONT}`;
   g.fillText(label, S / 2, S / 2 + S * 0.04);
-  foodCache.set(key, c);
+  spriteCache.set(key, c);
+  return c;
+}
+// Kafa üstündeki "8 ×" etiketi de önbellekten gelir (measureText her karede çağrılmaz)
+function labelSprite(text, color) {
+  const key = 'l' + text + color;
+  let c = spriteCache.get(key);
+  if (c) return c;
+  const fs = Math.round(cell * 0.62 * dpr);
+  const m = mkCanvas(1, 1).getContext('2d');
+  m.font = `800 ${fs}px ${FONT}`;
+  const w = Math.ceil(m.measureText(text).width + 8 * dpr), h = Math.round(cell * 0.8 * dpr);
+  c = mkCanvas(w, h);
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(15,23,42,0.85)'; g.fillRect(0, 0, w, h);
+  g.font = `800 ${fs}px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillStyle = color; g.fillText(text, w / 2, h / 2 + 1);
+  if (spriteCache.size > 400) spriteCache.clear();
+  spriteCache.set(key, c);
   return c;
 }
 
@@ -446,9 +478,10 @@ function drawWeatherFx(W, H) {
   }
 }
 
-// Ekranda kısa süreli uyarılar (ör. "⚡ Sıfırlandın!")
-let banners = [];
-function banner(text, color) { banners.push({ text, color, until: performance.now() + 1400 }); }
+// Kısa süreli yazılar ve yeni hedef duyurusu
+let banners = [], bigTarget = null;
+function banner(text, color) { banners.push({ text, color, until: performance.now() + 1400 }); if (banners.length > 3) banners.shift(); }
+function announceTarget(t) { bigTarget = { t, until: performance.now() + 1000 }; }
 
 function render(now) {
   if (!state || !bgLayer) return;
@@ -456,87 +489,99 @@ function render(now) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.drawImage(bgLayer, 0, 0, W, H);
 
-  for (const f of foods) {
-    ctx.drawImage(foodSprite(f, f.type === 'reset' && state.lock === socket.id), f.x * cell, f.y * cell, cell, cell);
-  }
+  for (const f of foods) ctx.drawImage(foodSprite(f.type, f.value, f.type === 'reset' && state.lock === socket.id), f.x * cell, f.y * cell, cell, cell);
 
-  // Yılanlar (yarı saydam: üst üste geçince ikisi de görünür)
-  for (const sn of state.s) {
-    ctx.globalAlpha = 0.88;
-    ctx.fillStyle = sn.color;
-    const pad = Math.max(1, cell * 0.1);
-    for (let i = 1; i < sn.body.length; i++) {
-      const p = sn.body[i];
-      ctx.fillRect(p.x * cell + pad, p.y * cell + pad, cell - pad * 2, cell - pad * 2);
-    }
+  const pad = Math.max(1, cell * 0.1), inner = cell - pad * 2;
+  state.s.forEach((sn, i) => {
+    const pl = players[i] || {}, frozen = sn.fz > 0, b = sn.b;
+    // Gövde: tek path, tek fill
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = frozen ? '#bae6fd' : pl.color;
+    ctx.beginPath();
+    for (let k = 1; k < b.length; k++) ctx.rect((b[k] % cols) * cell + pad, ((b[k] / cols) | 0) * cell + pad, inner, inner);
+    ctx.fill();
     ctx.globalAlpha = 1;
-    const h = sn.body[0];
-    ctx.fillRect(h.x * cell, h.y * cell, cell, cell);
-    ctx.strokeStyle = sn.id === socket.id ? '#facc15' : '#fff';
+    const hx = (b[0] % cols) * cell, hy = ((b[0] / cols) | 0) * cell;
+    ctx.fillStyle = frozen ? '#7dd3fc' : pl.color;
+    ctx.fillRect(hx, hy, cell, cell);
+    ctx.strokeStyle = pl.id === socket.id ? '#facc15' : '#fff';
     ctx.lineWidth = 2;
-    ctx.strokeRect(h.x * cell + 1, h.y * cell + 1, cell - 2, cell - 2);
-  }
-  // Baş etiketi: değer ve işlem
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.font = `800 ${Math.round(cell * 0.62)}px -apple-system, system-ui, sans-serif`;
-  for (const sn of state.s) {
-    const h = sn.body[0];
-    const ly = h.y === 0 ? (h.y + 1.6) * cell : (h.y - 0.55) * cell;
-    const text = `${sn.value} ${OP_SYMBOL[sn.op]}`;
-    const tw = ctx.measureText(text).width + 8;
-    ctx.fillStyle = 'rgba(15,23,42,0.8)';
-    ctx.fillRect(h.x * cell + cell / 2 - tw / 2, ly - cell * 0.4, tw, cell * 0.8);
-    ctx.fillStyle = sn.id === socket.id ? '#facc15' : '#fff';
-    ctx.fillText(text, h.x * cell + cell / 2, ly + 1);
-  }
+    ctx.strokeRect(hx + 1, hy + 1, cell - 2, cell - 2);
+  });
+  state.s.forEach((sn, i) => {
+    const pl = players[i] || {};
+    const text = `${sn.v} ${OP_SYMBOL[sn.o]}${sn.fz > 0 ? ' 🧊' + Math.ceil(sn.fz / 1000) : ''}`;
+    const spr = labelSprite(text, pl.id === socket.id ? '#facc15' : '#ffffff');
+    const w = spr.width / dpr, h = spr.height / dpr;
+    const hx = (sn.b[0] % cols) * cell, row = (sn.b[0] / cols) | 0;
+    const ly = row === 0 ? cell * 1.1 : row * cell - h - 2;
+    ctx.drawImage(spr, Math.min(Math.max(0, hx + cell / 2 - w / 2), W - w), ly, w, h);
+  });
 
   drawWeatherFx(W, H);
 
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (bigTarget) {
+    const left = bigTarget.until - now;
+    if (left <= 0) bigTarget = null;
+    else {
+      ctx.globalAlpha = Math.min(1, left / 300);
+      ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(0, H * 0.32, W, H * 0.36);
+      ctx.fillStyle = '#cbd5e1'; ctx.font = `800 ${Math.round(cell * 0.9)}px ${FONT}`;
+      ctx.fillText('YENİ HEDEF', W / 2, H * 0.39);
+      ctx.fillStyle = '#facc15'; ctx.font = `900 ${Math.round(cell * 4.5)}px ${FONT}`;
+      ctx.fillText(bigTarget.t, W / 2, H * 0.54);
+      ctx.globalAlpha = 1;
+    }
+  }
   if (banners.length) {
     banners = banners.filter(b => b.until > now);
+    ctx.font = `900 ${Math.round(cell * 1.1)}px ${FONT}`;
+    ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.7)';
     banners.forEach((b, i) => {
-      ctx.font = `900 ${Math.round(cell * 1.1)}px -apple-system, system-ui, sans-serif`;
-      ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.7)';
-      ctx.strokeText(b.text, W / 2, H * 0.3 + i * cell * 1.4);
-      ctx.fillStyle = b.color; ctx.fillText(b.text, W / 2, H * 0.3 + i * cell * 1.4);
+      const y = H * 0.2 + i * cell * 1.4;
+      ctx.strokeText(b.text, W / 2, y);
+      ctx.fillStyle = b.color; ctx.fillText(b.text, W / 2, y);
     });
   }
-
   if (state.cd > 0) {
     ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = '#facc15'; ctx.font = `900 ${Math.round(cell * 5)}px -apple-system, system-ui, sans-serif`;
+    ctx.fillStyle = '#facc15'; ctx.font = `900 ${Math.round(cell * 5)}px ${FONT}`;
     ctx.fillText(state.cd, W / 2, H / 2);
   }
 }
 
-// 30 FPS ile sınırlı çizim döngüsü; sekme gizliyken tarayıcı kendisi durdurur
-let rafId = null, lastDraw = 0;
+// Çizim döngüsü: hareketli efekt yoksa sadece yeni durum gelince çizer; telefonda en fazla 20 FPS
+let rafId = null, lastDraw = 0, dirty = false;
 function loop(now) {
   rafId = null;
-  if (!state || $('game').classList.contains('hidden')) return;
-  if (now - lastDraw >= 33) { lastDraw = now; frame++; render(now); }
-  rafId = requestAnimationFrame(loop);
+  if (!state || document.hidden || $('game').classList.contains('hidden')) return;
+  const animated = ANIMATED.has(theme) || banners.length > 0 || bigTarget !== null;
+  if ((dirty || animated) && now - lastDraw >= (isTouch ? 50 : 33)) { lastDraw = now; frame++; dirty = false; render(now); }
+  if (dirty || animated) rafId = requestAnimationFrame(loop);
 }
 function startLoop() { if (!rafId) rafId = requestAnimationFrame(loop); }
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { dirty = true; startLoop(); } });
 
 // ================= Maç =================
 function resize() {
   const wrap = $('boardWrap');
-  const availW = Math.min(wrap.clientWidth, 640);
-  const availH = wrap.clientHeight;
+  const availW = Math.min(wrap.clientWidth, 640), availH = wrap.clientHeight;
   cell = Math.max(10, Math.floor(Math.min(availW / cols, availH / rows)));
-  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  dpr = Math.min(window.devicePixelRatio || 1, isTouch ? 1.5 : 2); // telefonda daha az piksel = daha akıcı
   canvas.style.width = cols * cell + 'px';
   canvas.style.height = rows * cell + 'px';
   canvas.width = Math.round(cols * cell * dpr);
   canvas.height = Math.round(rows * cell * dpr);
   buildBackground();
+  dirty = true; startLoop();
 }
 let resizeTimer;
 window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state) resize(); }, 150); });
 
 socket.on('matchFound', data => {
-  cols = data.cols; rows = data.rows; lastCountdown = 0; foods = []; banners = [];
+  cols = data.cols; rows = data.rows; players = data.players;
+  lastCountdown = 0; foods = []; banners = []; bigTarget = null; lastTarget = null; state = null;
   matchWeather = data.weather || {};
   $('inviteModal').classList.add('hidden'); currentInvite = null;
   setSearching(false);
@@ -547,35 +592,50 @@ socket.on('matchFound', data => {
   theme = mine && SCENES[mine.theme] ? mine.theme : 'none';
   $('wxBadge').textContent = mine ? `Haritan: ${wxText(mine)}` : '';
   hudCache = {};
-  requestAnimationFrame(resize); // yerleşim oturduktan sonra ölç
+  players.forEach((p, i) => {
+    const el = $('p' + i), mineP = p.id === socket.id;
+    el.classList.toggle('me', mineP);
+    const n = el.querySelector('.pname');
+    n.textContent = p.name + (mineP ? ' (sen)' : ''); n.style.color = p.color;
+  });
+  requestAnimationFrame(resize);
 });
 
+const nameOf = id => (players.find(p => p.id === id) || {}).name || 'Rakip';
 socket.on('state', s => {
-  if (s.f) foods = s.f;
+  if (s.f) foods = s.f.map(([c, type, value]) => ({ x: c % cols, y: (c / cols) | 0, type, value }));
   for (const ev of s.ev || []) {
     const mine = ev.id === socket.id;
     if (SOUNDS[ev.type]) SOUNDS[ev.type](mine);
     if (ev.type === 'score') banner(mine ? '+1 PUAN!' : 'Rakip sayı yaptı', mine ? '#86efac' : '#fca5a5');
     else if (ev.type === 'zap') banner(mine ? '⚡ Rakibi sıfırladın!' : '⚡ Sıfırlandın!', mine ? '#fde047' : '#f87171');
-    else if (ev.type === 'reset') banner('⟲ Yeni hedef!', '#c4b5fd');
-    if (ev.type === 'zap' && !mine && navigator.vibrate) navigator.vibrate(150);
+    else if (ev.type === 'freeze') banner(mine ? '🧊 Rakip dondu!' : '🧊 Dondun! 5 sn', mine ? '#7dd3fc' : '#f87171');
+    else if (ev.type === 'bite') banner(mine ? `🐍 Isırdın! −${ev.n}` : `🐍 Isırıldın! −${ev.n}`, mine ? '#86efac' : '#f87171');
+    else if (ev.type === 'selfcut' && mine) banner(`Kuyruğunu yedin! −${ev.n}`, '#fdba74');
+    else if (ev.type === 'goldenNo') banner(mine ? 'Kobran kısa, altın gol sayılmadı!' : `${nameOf(ev.id)} kısa, sayılmadı!`, '#fdba74');
+    else if (ev.type === 'overtime') banner('ALTIN GOL!', '#f97316');
+    if ((ev.type === 'zap' || ev.type === 'freeze' || ev.type === 'bite') && !mine && navigator.vibrate) navigator.vibrate(150);
   }
   if (s.cd !== lastCountdown) {
-    if (s.cd > 0) SOUNDS.tick(false); else if (lastCountdown > 0) SOUNDS.tick(true);
+    if (s.cd > 0) SOUNDS.tick(false); else if (lastCountdown > 0) { SOUNDS.tick(true); announceTarget(s.t); }
     lastCountdown = s.cd;
   }
+  if (lastTarget !== null && s.t !== lastTarget && s.cd === 0) announceTarget(s.t);
+  lastTarget = s.t;
   state = s;
   renderHud();
+  dirty = true;
   startLoop();
 });
 
 socket.on('gameOver', r => {
   const won = r.winnerId === socket.id;
-  $('resultTitle').textContent = won ? '🏆 Kazandın!' : `😔 Kaybettin. Kazanan: ${r.winnerName}`;
+  $('resultTitle').textContent = r.winnerId === null ? '🤝 Berabere' : won ? '🏆 Kazandın!' : `😔 Kaybettin. Kazanan: ${r.winnerName}`;
   $('resultReason').textContent = r.reason;
-  $('resultScores').textContent = r.scores.map(s => `${s.name}: ${s.score}`).join('  |  ');
+  $('resultScores').innerHTML = r.scores.map(s =>
+    `${esc(s.name)}: <b>${s.score}</b>${s.bonus ? ' (📏 +1)' : ''} <small>· boy ${s.len}</small>`).join('<br>');
   $('overlay').classList.remove('hidden');
-  won ? SOUNDS.win() : SOUNDS.lose();
+  if (r.winnerId !== null) (won ? SOUNDS.win : SOUNDS.lose)();
 });
 $('backBtn').addEventListener('click', () => {
   state = null;
@@ -590,35 +650,25 @@ let hudCache = {};
 function renderHud() {
   setText($('target'), state.t);
   const t = $('timer');
-  if (state.ot) setText(t, 'ALTIN GOL!');
-  else setText(t, `${Math.floor(state.rem / 60)}:${String(state.rem % 60).padStart(2, '0')}`);
-  t.classList.toggle('ot', state.ot);
+  setText(t, state.ot ? 'ALTIN GOL!' : `${Math.floor(state.rem / 60)}:${String(state.rem % 60).padStart(2, '0')}`);
+  if (hudCache.ot !== state.ot) { t.classList.toggle('ot', state.ot); hudCache.ot = state.ot; }
   state.s.forEach((sn, i) => {
-    const el = $('p' + i), mine = sn.id === socket.id;
-    if (hudCache['c' + i] !== sn.color + mine) {
-      hudCache['c' + i] = sn.color + mine;
-      el.classList.toggle('me', mine);
-      const n = el.querySelector('.pname');
-      n.textContent = sn.name + (mine ? ' (sen)' : ''); n.style.color = sn.color;
-    }
-    setText(el.querySelector('.pscore'), sn.score);
-    const w = matchWeather[sn.id];
-    setText(el.querySelector('.pval'), `${sn.value} ${OP_SYMBOL[sn.op]}${w ? ' · ' + w.icon + (w.temp !== undefined ? w.temp + '°' : '') : ''}`);
-    if (mine) { setText($('myVal'), sn.value); setText($('myOp'), OP_SYMBOL[sn.op]); }
+    const el = $('p' + i), pl = players[i] || {}, len = sn.b.length + sn.g;
+    setText(el.querySelector('.pscore'), sn.sc);
+    setText(el.querySelector('.pval'), `${sn.v} ${OP_SYMBOL[sn.o]} · 📏${len}${sn.fz > 0 ? ' · 🧊' : ''}`);
+    if (pl.id === socket.id) { setText($('myVal'), sn.v); setText($('myOp'), OP_SYMBOL[sn.o]); setText($('myLen'), len); }
   });
   setText($('resetInfo'), !state.lock ? '⟲ ikinizde' : state.lock === socket.id ? '⟲ rakipte' : '⟲ sende');
 }
 
 // ================= Kontroller =================
 const KEYS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', w: 'up', s: 'down', a: 'left', d: 'right', W: 'up', S: 'down', A: 'left', D: 'right' };
-let lastDir = null;
-function sendDir(dir) { if (state) { socket.emit('dir', dir); lastDir = dir; } }
+function sendDir(dir) { if (state) socket.emit('dir', dir); }
 document.addEventListener('keydown', e => {
   if (!state || $('game').classList.contains('hidden')) return;
   const dir = KEYS[e.key];
   if (dir) { e.preventDefault(); sendDir(dir); }
 });
-// Ekran yön tuşları: pointerdown ile anında tepki
 $('dpad').addEventListener('pointerdown', e => {
   const b = e.target.closest('button[data-dir]');
   if (!b) return;
@@ -626,7 +676,6 @@ $('dpad').addEventListener('pointerdown', e => {
   sendDir(b.dataset.dir);
   b.classList.add('on'); setTimeout(() => b.classList.remove('on'), 120);
 });
-// Kaydırma: parmak hareket ederken de yön değişir
 let touchStart = null;
 const boardWrap = $('boardWrap');
 boardWrap.addEventListener('touchstart', e => { const t = e.touches[0]; touchStart = { x: t.clientX, y: t.clientY }; }, { passive: true });

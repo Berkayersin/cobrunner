@@ -1,6 +1,5 @@
-// Hava durumu: tarayıcı Open-Meteo'dan veriyi kendisi çeker (Render IP'leri kısıtlanabildiği için),
-// sunucu sadece doğrular ve temaya çevirir. Tarayıcı çekemezse sunucu yedek olarak dener.
-// Kaynak: Open-Meteo (https://open-meteo.com), ücretsiz, API anahtarı gerekmez.
+// Hava durumu: tarayıcı Open-Meteo'dan veriyi kendisi çeker, sunucu doğrular ve temaya çevirir.
+// Tarayıcı çekemezse sunucu yedek olarak dener. Kaynak: Open-Meteo (https://open-meteo.com)
 const cache = new Map();
 const TTL_MS = 10 * 60 * 1000;
 
@@ -14,7 +13,6 @@ const THEMES = {
   storm:  { label: 'Gök gürültülü fırtına', icon: '⛈️' }
 };
 
-// WMO hava kodu -> tema
 function themeFromCode(code, isDay) {
   if (code === 0 || code === 1) return isDay ? 'sunny' : 'night';
   if (code === 2 || code === 3) return 'cloudy';
@@ -24,13 +22,10 @@ function themeFromCode(code, isDay) {
   if (code >= 95) return 'storm';
   return isDay ? 'sunny' : 'night';
 }
-
 function build(code, isDay, temp, wind) {
   const theme = themeFromCode(code, isDay);
   return { theme, ...THEMES[theme], code, isDay, temp: Math.round(temp), wind: Math.round(wind) };
 }
-
-// Tarayıcıdan gelen ham veriyi doğrula
 function fromRaw(raw) {
   if (!raw) return null;
   const code = Number(raw.code), temp = Number(raw.temp), wind = Number(raw.wind);
@@ -38,8 +33,6 @@ function fromRaw(raw) {
   if (!Number.isFinite(temp) || temp < -90 || temp > 70) return null;
   return build(code, !!raw.isDay, temp, Number.isFinite(wind) ? wind : 0);
 }
-
-// Yedek: sunucudan çek
 async function fetchServer(lat, lon) {
   const key = lat.toFixed(2) + ',' + lon.toFixed(2);
   const hit = cache.get(key);
@@ -57,10 +50,8 @@ async function fetchServer(lat, lon) {
     return data;
   } finally { clearTimeout(timer); }
 }
-
 function withDemo(real, demoTheme) {
   if (!demoTheme || !THEMES[demoTheme]) return real;
   return { ...(real || {}), theme: demoTheme, ...THEMES[demoTheme], demo: true };
 }
-
 module.exports = { fromRaw, fetchServer, withDemo, THEMES };

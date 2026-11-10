@@ -18,13 +18,14 @@ const pub = u => u && ({ id: u.id, username: u.username, color: u.color });
 class PgStore {
   constructor(url) {
     const { Pool } = require('pg');
-    this.pool = new Pool({ connectionString: url, ssl: { rejectUnauthorized: false }, max: 5 });
+    this.pool = new Pool({ connectionString: url, ssl: { rejectUnauthorized: false }, max: 5,
+      connectionTimeoutMillis: 10000, query_timeout: 15000 }); // veritabanı yanıt vermezse takılı kalmasın
+    this.pool.on('error', e => console.error('Veritabanı hatası:', e.message));
     this.kind = 'PostgreSQL';
   }
   q(text, params) { return this.pool.query(text, params); }
 
   async init() {
-    // Tablolar ilk çalıştırmada otomatik oluşturulur
     await this.q(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -57,7 +58,6 @@ class PgStore {
         reason TEXT,
         played_at TIMESTAMPTZ DEFAULT now()
       );
-      -- Supabase'in herkese açık API'si bu tablolara erişemesin (sunucu doğrudan bağlandığı için etkilenmez)
       ALTER TABLE users ENABLE ROW LEVEL SECURITY;
       ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
       ALTER TABLE friendships ENABLE ROW LEVEL SECURITY;
@@ -136,6 +136,7 @@ class PgStore {
     const s = await this.q(`
       SELECT COUNT(*)::int AS games,
              COUNT(*) FILTER (WHERE winner_id = $1)::int AS wins,
+             COUNT(*) FILTER (WHERE winner_id IS NULL)::int AS draws,
              COALESCE(SUM(CASE WHEN p1_id = $1 THEN p1_score ELSE p2_score END), 0)::int AS points,
              COALESCE(MAX(CASE WHEN p1_id = $1 THEN p1_score ELSE p2_score END), 0)::int AS best
       FROM matches WHERE p1_id = $1 OR p2_id = $1`, [userId]);
@@ -153,8 +154,9 @@ class PgStore {
       GROUP BY u.id, u.username ORDER BY wins DESC, u.username LIMIT 10`);
     const st = s.rows[0];
     return {
-      stats: { ...st, losses: st.games - st.wins },
-      recent: recent.rows.map(r => ({ opponent: r.opponent || '(silinmiş)', myScore: r.my_score, oppScore: r.opp_score, won: r.winner_id === userId, duration: r.duration, playedAt: r.played_at })),
+      stats: { games: st.games, wins: st.wins, losses: st.games - st.wins - st.draws, points: st.points, best: st.best },
+      recent: recent.rows.map(r => ({ opponent: r.opponent || '(silinmiş)', myScore: r.my_score, oppScore: r.opp_score,
+        won: r.winner_id === userId, draw: r.winner_id === null, duration: r.duration, playedAt: r.played_at })),
       leaderboard: top.rows
     };
   }
@@ -208,13 +210,15 @@ class MemoryStore {
     const mine = this.matches.filter(m => m.p1Id === userId || m.p2Id === userId);
     const my = m => (m.p1Id === userId ? m.p1Score : m.p2Score);
     const wins = mine.filter(m => m.winnerId === userId).length;
+    const draws = mine.filter(m => m.winnerId === null).length;
     const winCount = {};
     for (const m of this.matches) if (m.winnerId) winCount[m.winnerId] = (winCount[m.winnerId] || 0) + 1;
     return {
-      stats: { games: mine.length, wins, losses: mine.length - wins, points: mine.reduce((a, m) => a + my(m), 0), best: Math.max(0, ...mine.map(my)) },
+      stats: { games: mine.length, wins, losses: mine.length - wins - draws, points: mine.reduce((a, m) => a + my(m), 0), best: Math.max(0, ...mine.map(my)) },
       recent: mine.slice(-8).reverse().map(m => {
         const oppId = m.p1Id === userId ? m.p2Id : m.p1Id;
-        return { opponent: (this.users.find(u => u.id === oppId) || {}).username, myScore: my(m), oppScore: m.p1Id === userId ? m.p2Score : m.p1Score, won: m.winnerId === userId, duration: m.duration, playedAt: m.playedAt };
+        return { opponent: (this.users.find(u => u.id === oppId) || {}).username, myScore: my(m), oppScore: m.p1Id === userId ? m.p2Score : m.p1Score,
+          won: m.winnerId === userId, draw: m.winnerId === null, duration: m.duration, playedAt: m.playedAt };
       }),
       leaderboard: Object.entries(winCount).map(([id, wins]) => ({ username: this.users.find(u => u.id === +id).username, wins })).sort((a, b) => b.wins - a.wins).slice(0, 10)
     };
