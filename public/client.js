@@ -1,5 +1,5 @@
 // Cobrunner istemcisi
-const socket = io({ transports: ['websocket', 'polling'] });
+const socket = io();
 const $ = id => document.getElementById(id);
 const canvas = $('board'), ctx = canvas.getContext('2d');
 const PALETTE = ['#22c55e', '#3b82f6', '#ef4444', '#eab308', '#a855f7', '#ec4899', '#f97316', '#06b6d4'];
