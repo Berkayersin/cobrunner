@@ -1,8 +1,9 @@
-// Gerçek hava durumu: Open-Meteo (ücretsiz, API anahtarı gerekmez) - https://open-meteo.com
-const cache = new Map(); // "lat,lon" -> { at, data }
+// Hava durumu: tarayıcı Open-Meteo'dan veriyi kendisi çeker (Render IP'leri kısıtlanabildiği için),
+// sunucu sadece doğrular ve temaya çevirir. Tarayıcı çekemezse sunucu yedek olarak dener.
+// Kaynak: Open-Meteo (https://open-meteo.com), ücretsiz, API anahtarı gerekmez.
+const cache = new Map();
 const TTL_MS = 10 * 60 * 1000;
 
-// Tema bilgileri (istemci haritayı buna göre çizer)
 const THEMES = {
   sunny:  { label: 'Güneşli',               icon: '☀️' },
   night:  { label: 'Açık gece',             icon: '🌙' },
@@ -24,29 +25,42 @@ function themeFromCode(code, isDay) {
   return isDay ? 'sunny' : 'night';
 }
 
-async function getWeather(lat, lon) {
+function build(code, isDay, temp, wind) {
+  const theme = themeFromCode(code, isDay);
+  return { theme, ...THEMES[theme], code, isDay, temp: Math.round(temp), wind: Math.round(wind) };
+}
+
+// Tarayıcıdan gelen ham veriyi doğrula
+function fromRaw(raw) {
+  if (!raw) return null;
+  const code = Number(raw.code), temp = Number(raw.temp), wind = Number(raw.wind);
+  if (!Number.isInteger(code) || code < 0 || code > 99) return null;
+  if (!Number.isFinite(temp) || temp < -90 || temp > 70) return null;
+  return build(code, !!raw.isDay, temp, Number.isFinite(wind) ? wind : 0);
+}
+
+// Yedek: sunucudan çek
+async function fetchServer(lat, lon) {
   const key = lat.toFixed(2) + ',' + lon.toFixed(2);
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.data;
-  const url = 'https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon +
-    '&current=temperature_2m,weather_code,is_day,wind_speed_10m,precipitation&timezone=auto';
-  const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
-  if (!res.ok) throw new Error('Hava durumu servisi yanıt vermedi (' + res.status + ')');
-  const c = (await res.json()).current;
-  const theme = themeFromCode(c.weather_code, c.is_day === 1);
-  const data = {
-    theme, ...THEMES[theme], code: c.weather_code,
-    temp: Math.round(c.temperature_2m), wind: Math.round(c.wind_speed_10m),
-    precipitation: c.precipitation, isDay: c.is_day === 1, time: c.time
-  };
-  cache.set(key, { at: Date.now(), data });
-  return data;
+  const url = 'https://api.open-meteo.com/v1/forecast?latitude=' + lat.toFixed(3) + '&longitude=' + lon.toFixed(3) +
+    '&current=temperature_2m,weather_code,is_day,wind_speed_10m&timezone=auto';
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6000);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal, headers: { 'User-Agent': 'cobrunner-game' } });
+    if (!res.ok) throw new Error('Hava servisi ' + res.status + ' döndü');
+    const c = (await res.json()).current;
+    const data = build(c.weather_code, c.is_day === 1, c.temperature_2m, c.wind_speed_10m);
+    cache.set(key, { at: Date.now(), data });
+    return data;
+  } finally { clearTimeout(timer); }
 }
 
-// Sunum modu: gerçek hava yerine seçilen temayı göster
 function withDemo(real, demoTheme) {
   if (!demoTheme || !THEMES[demoTheme]) return real;
   return { ...(real || {}), theme: demoTheme, ...THEMES[demoTheme], demo: true };
 }
 
-module.exports = { getWeather, withDemo, THEMES };
+module.exports = { fromRaw, fetchServer, withDemo, THEMES };

@@ -2,24 +2,29 @@
 <html lang="tr">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <title>Cobrunner</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
-  <!-- Bağlantı / yükleniyor -->
-  <div id="loading" class="panel center"><h1><img src="logo.svg" alt="Cobrunner" class="logo"></h1><p>Sunucuya bağlanılıyor... (ilk açılışta 1 dakika sürebilir)</p></div>
+  <!-- Bağlantı -->
+  <div id="loading" class="panel center screen">
+    <img src="logo.svg" alt="Cobrunner" class="logo">
+    <p>Sunucuya bağlanılıyor... (ilk açılışta 1 dakika sürebilir)</p>
+  </div>
 
   <!-- Giriş / kayıt -->
-  <div id="auth" class="panel hidden">
-    <h1><img src="logo.svg" alt="Cobrunner" class="logo"></h1>
+  <div id="auth" class="panel screen hidden">
+    <img src="logo.svg" alt="Cobrunner" class="logo">
     <div class="tabs" role="tablist">
       <button type="button" id="tabLogin" class="tab active" role="tab">Giriş Yap</button>
       <button type="button" id="tabRegister" class="tab" role="tab">Kayıt Ol</button>
     </div>
     <form id="authForm" autocomplete="on">
-      <label class="field">Kullanıcı adı <input id="authName" maxlength="16" autocomplete="username" required></label>
+      <label class="field">Kullanıcı adı <input id="authName" maxlength="16" autocomplete="username" autocapitalize="off" autocorrect="off" required></label>
       <label class="field">Şifre <input id="authPass" type="password" maxlength="64" autocomplete="current-password" required></label>
       <button id="authSubmit" type="submit">Giriş Yap</button>
     </form>
@@ -30,17 +35,16 @@
   <div id="lobby" class="hidden">
     <header class="topbar">
       <img src="logo.svg" alt="Cobrunner" class="logo-small">
-      <div>👤 <b id="meName"></b> <button id="logoutBtn" type="button" class="mini">Çıkış</button></div>
+      <div class="me">👤 <b id="meName"></b> <button id="logoutBtn" type="button" class="mini">Çıkış</button></div>
     </header>
     <div class="grid">
       <section class="panel">
-        <h2>Maç</h2>
         <div id="wxCard" class="wxcard" aria-live="polite">
-          <div id="wxMain">📍 Konum alınıyor...</div>
+          <div id="wxMain">📍 Konum bekleniyor</div>
           <div id="wxSub" class="muted"></div>
-          <div class="row wxrow">
-            <button id="wxRefresh" type="button" class="mini">Konumu yenile</button>
-            <label class="muted demo">Sunum modu
+          <div class="wxrow">
+            <button id="wxRefresh" type="button" class="mini">📍 Konumumu kullan</button>
+            <label class="demo">Sunum modu
               <select id="wxDemo" aria-label="Sunum modu hava teması">
                 <option value="">Gerçek hava</option>
                 <option value="sunny">☀️ Güneşli</option>
@@ -70,14 +74,16 @@
         <details class="rules">
           <summary>Nasıl oynanır?</summary>
           <ul>
-            <li>Yön tuşları / WASD ile yönet; mobilde ekranı kaydır.</li>
-            <li>Sayı yiyince bekleyen işlem değerine uygulanır (varsayılan +).</li>
-            <li>+ − × ÷ yemleri sıradaki sayının işlemini belirler. Bölmede sonuç aşağı yuvarlanır.</li>
-            <li>Değerin hedefe eşit olunca 1 puan alırsın.</li>
-            <li>⟲ hedefi yeniler, değerler korunur. Rakibin hedefe yaklaştıysa boz! Sırayla kullanılır: son kullanan sıradakini yiyemez.</li>
-            <li>Harita, bulunduğun yerin anlık hava durumuna göre değişir (güneş, yağmur, kar, sis, fırtına, gece).</li>
-            <li>Duvarlardan karşıya geçebilir, rakibin içinden geçebilirsin.</li>
+            <li>Telefonda alttaki yön tuşlarıyla ya da ekranı kaydırarak, bilgisayarda yön tuşları / WASD ile oyna.</li>
+            <li>Başlangıçta işlemin <b>+</b>. Bir işlem yemi (+ − × ÷) yiyene kadar işlemin değişmez; her sayı bu işlemle değerine eklenir.</li>
+            <li>Örnek: 3 → değer 3; + al, 5 al → 8; tekrar 2 al → 10.</li>
+            <li>Değer eksiye düşmez. 0'dayken − × ÷ işe yaramaz; <b>+</b> alıp sayı toplamalısın. Bölmede sonuç aşağı yuvarlanır.</li>
+            <li>Değerin hedefe eşit olunca 1 puan; değerin 0'a, işlemin +'ya döner.</li>
+            <li><b>⟲</b> hedefi yeniler, değerler korunur. Sırayla kullanılır: son kullanan sıradakini yiyemez.</li>
+            <li><b>⚡</b> rakibinin değerini sıfırlar.</li>
+            <li>Duvarlardan karşıya, rakibin içinden geçebilirsin.</li>
             <li>Berabere biterse son sayıyı yapan kazanır; 0-0 ise altın gol.</li>
+            <li>Harita, bulunduğun yerin anlık havasına göre değişir.</li>
           </ul>
         </details>
       </section>
@@ -85,7 +91,7 @@
       <section class="panel">
         <h2>Arkadaşlar</h2>
         <form id="addFriendForm" class="row">
-          <input id="friendName" maxlength="16" placeholder="Kullanıcı adı" aria-label="Eklenecek kullanıcı adı">
+          <input id="friendName" maxlength="16" placeholder="Kullanıcı adı" aria-label="Eklenecek kullanıcı adı" autocapitalize="off" autocorrect="off">
           <button type="submit" class="small">Ekle</button>
         </form>
         <p id="friendMsg" class="msg" aria-live="polite"></p>
@@ -113,7 +119,7 @@
     <p class="credit muted">Hava verisi: <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> · Konum: BigDataCloud</p>
   </div>
 
-  <!-- Davet penceresi -->
+  <!-- Davet -->
   <div id="inviteModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="inviteText">
     <div class="panel center">
       <p id="inviteText"></p>
@@ -127,18 +133,28 @@
   <!-- Oyun -->
   <div id="game" class="hidden">
     <div id="hud">
-      <div id="p0" class="pinfo"></div>
+      <div id="p0" class="pinfo"><div class="pname"></div><div class="pscore">0</div><div class="pval"></div></div>
       <div id="center">
         <div class="label">HEDEF</div>
         <div id="target">-</div>
         <div id="timer"></div>
-        <div id="resetInfo"></div>
-        <button id="muteBtn" type="button" class="mini" aria-label="Sesi aç/kapat">🔊</button>
       </div>
-      <div id="p1" class="pinfo"></div>
+      <div id="p1" class="pinfo"><div class="pname"></div><div class="pscore">0</div><div class="pval"></div></div>
     </div>
-    <div id="wxBadge" class="wxbadge"></div>
-    <canvas id="board"></canvas>
+    <div id="myBar">
+      <span>Değerin <b id="myVal">0</b></span>
+      <span>İşlemin <b id="myOp" class="opchip">+</b></span>
+      <span id="resetInfo"></span>
+      <button id="muteBtn" type="button" class="mini" aria-label="Sesi aç/kapat">🔊</button>
+    </div>
+    <div id="wxBadge"></div>
+    <div id="boardWrap"><canvas id="board"></canvas></div>
+    <div id="dpad" class="hidden" aria-label="Yön tuşları">
+      <span></span><button type="button" data-dir="up" aria-label="Yukarı">▲</button><span></span>
+      <button type="button" data-dir="left" aria-label="Sol">◀</button>
+      <button type="button" data-dir="down" aria-label="Aşağı">▼</button>
+      <button type="button" data-dir="right" aria-label="Sağ">▶</button>
+    </div>
     <div id="overlay" class="modal hidden">
       <div class="panel center">
         <h2 id="resultTitle"></h2>
@@ -152,6 +168,6 @@
   <div id="toast" class="toast hidden" aria-live="polite"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="client.js"></script>
+  <script src="client.js?v=2"></script>
 </body>
 </html>
